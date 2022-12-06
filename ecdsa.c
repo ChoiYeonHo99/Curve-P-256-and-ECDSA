@@ -47,7 +47,8 @@ static hashInfo getHashInfo(const int sha2_ndx) {
 	}
 }
 
-const int a = -3;
+const int a_sign = -1;
+const unsigned int a = 3;
 mpz_t p, n;
 ecdsa_p256_t *G;
 
@@ -79,8 +80,11 @@ static int ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, const
 		//lamda = (y2-y1) / (x2-x1)
 		mpz_sub(lamda, y2, y1); mpz_mod(lamda, lamda, p);
 		mpz_sub(lamda_b, x2, x1); mpz_mod(lamda_b, lamda_b, p);
-		if(mpz_cmp_ui(lamda_b, 0) == 0) // 무한 원점
+		// 무한 원점
+		if(mpz_cmp_ui(lamda_b, 0) == 0){
+			mpz_clears(x1, x2, x3, y1, y2, y3, lamda, lamda_b, multi2x, NULL);
 			return 1;
+		}
 
 		mpz_invert(lamda_b, lamda_b, p);
 
@@ -98,18 +102,21 @@ static int ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, const
 		mpz_sub(y3, y3, y1); mpz_mod(y3, y3, p);
 	} else{
 		// P == Q : ECC Point Doubling
-		if(mpz_cmp_ui(y1, 0) == 0) // 무한 원점
-			return 0;
+		// 무한 원점
+		if(mpz_cmp_ui(y1, 0) == 0){
+			mpz_clears(x1, x2, x3, y1, y2, y3, lamda, lamda_b, multi2x, NULL);
+			return 1;
+		}
 
 		//lamda = (3*x_1^2 + a) / 2y_1
 		mpz_powm_ui(lamda, x1, 2, p);
 
 		mpz_mul_ui(lamda, lamda, 3); mpz_mod(lamda, lamda, p);
 
-		if(a >= 0) 
+		if(a_sign >= 0) 
 			mpz_add_ui(lamda, lamda, a);
 		else
-			mpz_sub_ui(lamda, lamda, -a);
+			mpz_sub_ui(lamda, lamda, a);
 
 		mpz_mul_ui(lamda_b, y1, 2); mpz_mod(lamda_b, lamda_b, p);
 		mpz_invert(lamda_b, lamda_b, p);
@@ -153,19 +160,19 @@ static int ecc_mul(ecdsa_p256_t *rpoint, ecdsa_p256_t point, const mpz_t time){
 	// Scalar Multiplication
 	while(mpz_cmp_si(t, 0) > 0){
 		if(mpz_tstbit(t, 0) == 1){
-			if(resultINF == 1){ // 무한 원점은 고정된 점이 아니므로 무한 원짐일 시 초기화(= 최초 연산시 값을 복사)
+			if(resultINF == 1){ // 무한 원짐일 시 초기화
 				memcpy(&result, &point, sizeof(ecdsa_p256_t));
 				resultINF = 0;
 			}
 			else{
-				if(ecc_add(&result, &result, &point) == 1){ //result + point == O 일 경우,
+				if(ecc_add(&result, &result, &point) == 1){ // result + point == O 일 경우,
 					resultINF = 1;
 				}
 			}
 		}
 		
 		mpz_tdiv_q_2exp(t, t, 1);
-		ecc_add(&point, &point, &point); // module prime 연상상 point가 무한 원점으로 이동하지 않는다.
+		ecc_add(&point, &point, &point); // 기저점이 음수이므로 과정상 무한원점으로 이동하지 않는다.
 	}
 	*rpoint = result;
 
@@ -297,6 +304,7 @@ int ecdsa_p256_sign(const void *msg, size_t len, const void *d, void *_r, void *
 			mpz_sub(temp, n, temp2);
 			mpz_urandomm(k, state, temp);
 			mpz_add(k, k, temp2);
+			
 			// 4. (x1, y1) = kG
 			ecdsa_p256_t x1y1;
 			ecc_mul(&x1y1, *G, k);
@@ -356,8 +364,8 @@ int ecdsa_p256_verify(const void *msg, size_t len, const ecdsa_p256_t *_Q, const
 	mpz_import(s, ECDSA_P256 / 8, 1, 1, 1, 0, _s);
 
 	//step 1
-	mpz_set(tmp, n);
-	if (mpz_cmp(r, tmp - 1) > 0 || mpz_cmp(s, tmp - 1) > 0){
+	mpz_set(tmp, n); mpz_sub_ui(tmp, tmp, 1);
+	if (mpz_cmp_ui(r, 0) == 0 || mpz_cmp(r, tmp) > 0 || mpz_cmp_ui(s, 0) == 0 || mpz_cmp(s, tmp) > 0){
 		mpz_clears(tmp, e, r, s, NULL);
 		return ECDSA_SIG_INVALID;
 	}
