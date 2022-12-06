@@ -55,11 +55,12 @@ ecdsa_p256_t *G;
  *  @note mpz_t p, 정수 a가 정의되어야 합니다. 
  *        p = prime number(modulo)
  *  @param rpoint : 덧셈 결과 ECC point
- *  @param point1 : 대상 ECC point
- *  @param point2 : 대상 ECC point
+ *  @param point1 : 무한 원점이 아닌 대상 ECC point
+ *  @param point2 : 무한 원점이 아닌 대상 ECC point
  *  @example ecc_add(&result, &P, &Q);
+ *  @return 0 if success, 1 if INF_0
  */
-static void ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, const ecdsa_p256_t *const  point2){
+static int ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, const ecdsa_p256_t *const  point2){
 	// point 값들을 mpz 값으로 초기화 한다.
 	// lamda, lamda_b, multi2x는 ecc 연산시 필요한 추가 메모리 공간을 위해 사용한다.(임시 변수)
 	mpz_t x1, x2, x3, y1, y2, y3, lamda, lamda_b, multi2x;
@@ -78,6 +79,8 @@ static void ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, cons
 		//lamda = (y2-y1) / (x2-x1)
 		mpz_sub(lamda, y2, y1); mpz_mod(lamda, lamda, p);
 		mpz_sub(lamda_b, x2, x1); mpz_mod(lamda_b, lamda_b, p);
+		if(mpz_cmp_ui(lamda_b, 0) == 0) // 무한 원점
+			return 1;
 
 		mpz_invert(lamda_b, lamda_b, p);
 
@@ -95,6 +98,8 @@ static void ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, cons
 		mpz_sub(y3, y3, y1); mpz_mod(y3, y3, p);
 	} else{
 		// P == Q : ECC Point Doubling
+		if(mpz_cmp_ui(y1, 0) == 0) // 무한 원점
+			return 0;
 
 		//lamda = (3*x_1^2 + a) / 2y_1
 		mpz_powm_ui(lamda, x1, 2, p);
@@ -124,17 +129,20 @@ static void ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, cons
 	mpz_export(rpoint -> x, NULL, 1, ECDSA_P256/8, 1, 0, x3);
 	mpz_export(rpoint -> y, NULL, 1, ECDSA_P256/8, 1, 0, y3);
 	mpz_clears(x1, x2, x3, y1, y2, y3, lamda, lamda_b, multi2x, NULL);
+
+	return 0;
 }
 
 /** @brief ECC point 상의 곱셈, rpoint = point * time
  *  @note mpz_t p, a가 정의되어야 합니다. 
  *        p = prime number(modulo)
  *  @param rpoint : 곱셈 결과 ECC point
- *  @param point : 대상 ECC point
+ *  @param point : 무한 원점이 아닌 대상 ECC point
  *  @param time : 덧셈 횟수
  *  @example ecc_mul(&result, P, T);
+ *  @return 0 if success, 1 if INF_0
  */
-void ecc_mul(ecdsa_p256_t *rpoint, ecdsa_p256_t point, const mpz_t time){
+static int ecc_mul(ecdsa_p256_t *rpoint, ecdsa_p256_t point, const mpz_t time){
 	ecdsa_p256_t result;
 	int resultINF = 1;
 
@@ -149,16 +157,21 @@ void ecc_mul(ecdsa_p256_t *rpoint, ecdsa_p256_t point, const mpz_t time){
 				memcpy(&result, &point, sizeof(ecdsa_p256_t));
 				resultINF = 0;
 			}
-			else
-				ecc_add(&result, &result, &point);
+			else{
+				if(ecc_add(&result, &result, &point) == 1){ //result + point == O 일 경우,
+					resultINF = 1;
+				}
+			}
 		}
 		
 		mpz_tdiv_q_2exp(t, t, 1);
-		ecc_add(&point, &point, &point);
+		ecc_add(&point, &point, &point); // module prime 연상상 point가 무한 원점으로 이동하지 않는다.
 	}
 	*rpoint = result;
 
 	mpz_clear(t);
+
+	return resultINF;
 }
 
 /*
@@ -398,17 +411,14 @@ int ecdsa_p256_verify(const void *msg, size_t len, const ecdsa_p256_t *_Q, const
 	ecc_mul(&u2Q, *_Q, u2); //u2Q
 	
 	ecdsa_p256_t x1y1;
-	ecc_add(&x1y1, &u1G, &u2Q); //xi, yi
+	int isInfPoint = ecc_add(&x1y1, &u1G, &u2Q); //xi, yi
 	
 
 	mpz_import(x1, ECDSA_P256 / 8, 1, 1, 1, 0, x1y1.x);
 	mpz_import(y1, ECDSA_P256 / 8, 1, 1, 1, 0, x1y1.y);
 	
 	//if ( (x1, y1) == O) return ECDSA_SIG_MISMATCH;
-	mpz_t O;
-	mpz_init(O);
-	mpz_add(O, x1, y1);
-	if(mpz_cmp(O, x1) == 0 || mpz_cmp(O, y1) == 0){
+	if(isInfPoint == 1){
 		mpz_clears(e, s, u1, u2, s_invert, y1, r, x1, NULL);
 		return ECDSA_SIG_INVALID;
 	}
