@@ -152,13 +152,14 @@ static int ecc_add(ecdsa_p256_t *rpoint, const ecdsa_p256_t *const point1, const
 static int ecc_mul(ecdsa_p256_t *rpoint, ecdsa_p256_t point, const mpz_t time){
 	ecdsa_p256_t result;
 	int resultINF = 1;
+	int pointINF = 0;
 
 	mpz_t t;
 	mpz_init(t);
 	mpz_set(t, time);
 
-	// Scalar Multiplication
-	while(mpz_cmp_si(t, 0) > 0){
+	// Square Multiplication
+	while(mpz_cmp_si(t, 0) > 0 && pointINF == 0){
 		if(mpz_tstbit(t, 0) == 1){
 			if(resultINF == 1){ // 무한 원짐일 시 초기화
 				memcpy(&result, &point, sizeof(ecdsa_p256_t));
@@ -172,7 +173,7 @@ static int ecc_mul(ecdsa_p256_t *rpoint, ecdsa_p256_t point, const mpz_t time){
 		}
 		
 		mpz_tdiv_q_2exp(t, t, 1);
-		ecc_add(&point, &point, &point); // 기저점이 음수이므로 과정상 무한원점으로 이동하지 않는다.
+		pointINF = ecc_add(&point, &point, &point);
 	}
 	*rpoint = result;
 
@@ -249,16 +250,16 @@ void ecdsa_p256_key(void *d, ecdsa_p256_t *Q)
  */
 int ecdsa_p256_sign(const void *msg, size_t len, const void *d, void *_r, void *_s, int sha2_ndx)
 {
+	// sha2_ndx에 따른 구조체를 정의한다
+	hashInfo hi = getHashInfo(sha2_ndx);
+
 	// 입력 메시지가 너무 길어 한도를 초과함
-	if (len >= 0x1fffffffffffffffLL)
+	if (hi.messageLimitLen == 64 && len >= 0x1fffffffffffffffLL)
 		return ECDSA_MSG_TOO_LONG;
 	
 	// Hash함수에 따른 e의 길이 hLen과 Hash값을 담을 _e를 선언한다
 	size_t hLen;
 	unsigned char *_e;
-	
-	// sha2_ndx에 따른 구조체를 정의한다
-	hashInfo hi = getHashInfo(sha2_ndx);
 
 	// 1. e = H(m)
 	hLen = hi.hashLen;
@@ -304,7 +305,7 @@ int ecdsa_p256_sign(const void *msg, size_t len, const void *d, void *_r, void *
 			mpz_sub(temp, n, temp2);
 			mpz_urandomm(k, state, temp);
 			mpz_add(k, k, temp2);
-			
+
 			// 4. (x1, y1) = kG
 			ecdsa_p256_t x1y1;
 			ecc_mul(&x1y1, *G, k);
@@ -353,8 +354,11 @@ int ecdsa_p256_sign(const void *msg, size_t len, const void *d, void *_r, void *
  */
 int ecdsa_p256_verify(const void *msg, size_t len, const ecdsa_p256_t *_Q, const void *_r, const void *_s, int sha2_ndx)
 {
+	// sha2_ndx에 따른 구조체를 정의한다
+	hashInfo hi = getHashInfo(sha2_ndx);
+
 	// 입력 메시지가 너무 길어 한도를 초과함
-	if (len >= 0x1fffffffffffffffLL) 
+	if (hi.messageLimitLen == 64 && len >= 0x1fffffffffffffffLL)
 		return ECDSA_MSG_TOO_LONG;
 	
 	mpz_t tmp, e, r, s;
@@ -365,7 +369,7 @@ int ecdsa_p256_verify(const void *msg, size_t len, const ecdsa_p256_t *_Q, const
 
 	//step 1
 	mpz_set(tmp, n); mpz_sub_ui(tmp, tmp, 1);
-	if (mpz_cmp_ui(r, 0) == 0 || mpz_cmp(r, tmp) > 0 || mpz_cmp_ui(s, 0) == 0 || mpz_cmp(s, tmp) > 0){
+	if (mpz_cmp_ui(r, 1) < 0 || mpz_cmp(r, tmp) > 0 || mpz_cmp_ui(s, 1) < 0 || mpz_cmp(s, tmp) > 0){
 		mpz_clears(tmp, e, r, s, NULL);
 		return ECDSA_SIG_INVALID;
 	}
@@ -374,7 +378,6 @@ int ecdsa_p256_verify(const void *msg, size_t len, const ecdsa_p256_t *_Q, const
 	//step 2
 	unsigned char *_e;
 	size_t hLen;
-	hashInfo hi = getHashInfo(sha2_ndx);
 	hLen = hi.hashLen;
 	_e = malloc(sizeof(unsigned char) * hLen);
 	hi.hashFunction(msg, len, _e);
